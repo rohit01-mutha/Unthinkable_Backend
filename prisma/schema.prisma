@@ -1,0 +1,201 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  CUSTOMER
+  AGENT
+  ADMIN
+}
+
+enum VerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum AgentVerificationAction {
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+enum OrderType {
+  B2B
+  B2C
+}
+
+enum PaymentType {
+  PREPAID
+  COD
+}
+
+enum OrderStatus {
+  PLACED
+  ASSIGNED
+  PICKED_UP
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  FAILED
+  RESCHEDULED
+  CANCELLED
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  phone        String
+  passwordHash String
+  role         Role
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relationships
+  agentProfile        AgentProfile?
+  ordersCreated       Order[]                @relation("CreatorOrders")
+  ordersAsCustomer    Order[]                @relation("CustomerOrders")
+  verificationActions AgentVerificationLog[] @relation("ActedBy")
+  proposedRequests    AdminAccountRequest[]  @relation("ProposedAdminRequests")
+  approvedRequests    AdminAccountRequest[]  @relation("ApprovedAdminRequests")
+}
+
+model AgentProfile {
+  id                 String             @id @default(uuid())
+  userId             String             @unique
+  verificationStatus VerificationStatus @default(PENDING)
+  currentZoneId      String?
+  availability       Boolean            @default(true)
+  vehicleType        String
+  kycDocUrl          String
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  // Relationships
+  user             User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currentZone      Zone?                  @relation(fields: [currentZoneId], references: [id])
+  verificationLogs AgentVerificationLog[]
+  orders           Order[]                @relation("AssignedAgentOrders")
+}
+
+model AgentVerificationLog {
+  id             String                  @id @default(uuid())
+  agentProfileId String
+  action         AgentVerificationAction
+  actedByUserId  String
+  notes          String?
+  timestamp      DateTime                @default(now())
+
+  // Relationships
+  agentProfile AgentProfile @relation(fields: [agentProfileId], references: [id], onDelete: Cascade)
+  actedByUser  User         @relation("ActedBy", fields: [actedByUserId], references: [id])
+
+  // Prevent application editing (append-only constraint index)
+  @@index([timestamp])
+}
+
+model Zone {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relationships
+  areas         ZoneArea[]
+  agentProfiles AgentProfile[]
+  pickupOrders  Order[]        @relation("PickupZoneOrders")
+  dropOrders    Order[]        @relation("DropZoneOrders")
+}
+
+model ZoneArea {
+  pincode   String   @id // Many pincodes map to one zone, pincode is primary key
+  zoneId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relationships
+  zone Zone @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+}
+
+model RateCard {
+  id             String    @id @default(uuid())
+  orderType      OrderType @unique
+  intraZoneRate  Float
+  interZoneRate  Float
+  codSurcharge   Float
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+model Order {
+  id                 String      @id @default(uuid())
+  customerId         String
+  createdByUserId    String
+  pickupPincode      String
+  dropPincode        String
+  pickupZoneId       String
+  dropZoneId         String
+  length             Float
+  breadth            Float
+  height             Float
+  actualWeight       Float
+  volumetricWeight   Float
+  billableWeight     Float
+  orderType          OrderType
+  paymentType        PaymentType
+  charge             Float
+  chargeIsEstimated  Boolean     @default(true)
+  status             OrderStatus @default(PLACED)
+  assignedAgentId    String?
+  pendingAssignment  Boolean     @default(true)
+  rescheduleCount    Int         @default(0)
+  deliveryDate       DateTime?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  // Relationships
+  customer      User                 @relation("CustomerOrders", fields: [customerId], references: [id])
+  creator       User                 @relation("CreatorOrders", fields: [createdByUserId], references: [id])
+  pickupZone    Zone                 @relation("PickupZoneOrders", fields: [pickupZoneId], references: [id])
+  dropZone      Zone                 @relation("DropZoneOrders", fields: [dropZoneId], references: [id])
+  assignedAgent AgentProfile?        @relation("AssignedAgentOrders", fields: [assignedAgentId], references: [id])
+  statusHistory OrderStatusHistory[]
+}
+
+model OrderStatusHistory {
+  id        String      @id @default(uuid())
+  orderId   String
+  status    OrderStatus
+  actor     String      // Name or email of the system user who triggered this change
+  actorRole Role
+  notes     String?
+  timestamp DateTime    @default(now())
+
+  // Relationships
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  // Prevent editing (append-only constraint index)
+  @@index([timestamp])
+}
+
+model AdminAccountRequest {
+  id                String             @id @default(uuid())
+  proposedEmail     String             @unique
+  proposedByAdminId String
+  approvedByAdminId String?
+  status            VerificationStatus @default(PENDING)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  // Relationships
+  proposedByAdmin User  @relation("ProposedAdminRequests", fields: [proposedByAdminId], references: [id])
+  approvedByAdmin User? @relation("ApprovedAdminRequests", fields: [approvedByAdminId], references: [id])
+
+  // Application constraint: approvedByAdminId can never equal proposedByAdminId
+}
